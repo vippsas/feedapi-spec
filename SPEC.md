@@ -6,6 +6,27 @@ For now, this documentation is a working document for people
 very familiar with ZeroEventHub; therefore no attempt is made
 at explaining concepts.
 
+## Versioning
+
+[ZeroEventHub](https://github.com/vippsas/zeroeventhub/blob/main/SPEC.md) is considered "version 1" of this
+protocol, and this spec is considered "version 2".
+
+FeedAPI server and client libraries are expected to support *both* versions for
+a longer period of time; with the exception that the multiple-partition-per-call
+feature of version 1 is unused and will remain unused. I.e., `cursor0=..&cursor1=..`
+has never been used and should never be used.
+
+#### Protocol negotiation
+
+FeedAPI clients should start with a simple `GET` to the FeedAPI endpoint without any
+arguments. For version 1 (ZeroEventHub) this should result in a 400
+error (ErrNoCursors); for version 2 the result will be the discovery endpoint
+JSON payload documented below.
+
+In the events fetch endpoint, the presence of the argument `?partition=`
+indicates that the client is using FeedAPI version 2.
+
+
 ## Endpoint name
 
 FeedAPI is using RPC over HTTP. All communication for a given
@@ -16,6 +37,8 @@ e.g., to specify partition or version or similar.
 
 Why?
 
+* This is how version 1 works. It will be simpler to keep using
+  the same endpoints for version 1 of the protocol and version 2.
 * Easier to develop the protocol in the server libraries, without having
   changes to also have to propagate to the request path routing
   in the service (of which there
@@ -28,33 +51,12 @@ Why?
 Below `https://service/myfeed` is used as a placeholder in examples
 for an arbitrary endpoint name.
 
-## Authorization, in particular of discovery call
+## Authorization
 
 Authorization is in general recommended to use a Bearer token in the Authorization
 header; although the exact scheme is out of the scope of this specification.
 
 Standard HTTP 401 and 403 response codes should be used.
-
-It is **very important** that the discovery call is **not more open** than
-the fetch call. I.e.; if fetching a page of events would return 401 or 403,
-then the argument-less discovery call **MUST** also return 401/403.
-The reason for this is so if one sets up caching proxies in front of the publishing
-service, then a discovery call can be used by the proxy to do federated
-authorization.
-
-### Details on federated authorization
-
-* The caching proxy should *for each new bearer token* make a discovery call
-  to the original publishing service, in order to check that the token
-  is accepted. Provided that the discovery call returns 200 OK, the bearer token
-  can be trusted.
-* The discovery call returns a field `authorizationExpires`. This should
-  be used by the caching proxy. (The common implementation is that this is the `exp`
-  field of the JWT, but important that this is done by the publisher, which
-  can also opt for having a shorter expiry than the one in the token).
-* The caching proxy should not in general need to understand the bearer token
-  (e.g. even know that it is a JWT). It may do so, but should do so *in addition* to the
-  mechanism described above.
 
 ## Partitions
 
@@ -81,17 +83,17 @@ this is the relevant section for partitions:
 {
   "partitions": [
     {
-      "id": 0,
+      "id": "0",
       "lastCursor": "f1ceaa92eb7c11eda43d6fb319691265",
       "closed": true
     },
     {
-      "id": 16232,
-      "startsAfterParent": 0
+      "id": "16232",
+      "startsAfterParent": "0"
     },
     {
-      "id": 24223,
-      "splitFromAncestors": [24001, 24100]
+      "id": "24223",
+      "splitFromAncestors": ["24001", "24100"]
     }
   ]
 }
@@ -121,17 +123,17 @@ For instance, in this case partition 0 was split into partitions 1 and 2:
 {
   "partitions": [
     {
-      "id": 0,
+      "id": "0",
       "lastCursor": "f1ceaa92eb7c11eda43d6fb319691265",
       "closed": true
     },
     {
-      "id": 1,
-      "startsAfterPartition": 0
+      "id": "1",
+      "startsAfterPartition": "0"
     },
     {
-      "id": 2,
-      "startsAfterPartition": 0
+      "id": "2",
+      "startsAfterPartition": "0"
     }
   ]
 }
@@ -164,7 +166,7 @@ situation before the split:
 {
   "partitions": [
     {
-      "id": 0,
+      "id": "0",
     },
   ]
 }
@@ -174,12 +176,12 @@ Then, *after* the split, we have this:
 {
   "partitions": [
     {
-      "id": 1,
-      "cursorFromPartitions": [0]
+      "id": "1",
+      "cursorFromPartitions": ["0"]
     },
     {
-      "id": 2,
-      "cursorFromPartitions": [0]
+      "id": "2",
+      "cursorFromPartitions": ["0"]
     }
   ]
 }
@@ -199,10 +201,6 @@ Note that `cursorFromPartitions` is a list. It lists *all* partitions
 one may transfer a cursor from. For instance this can be the path through
 an inheritance tree to the root (first parent, then grand-parent, and so on).
 
-This functionality can also be used to *merge* partitions. In that
-case there may for instance be a single partition that has a `cursorFromPartitions`
-listing two parent partitions.
-
 ## Discovery call
 
 A simple argument-less `GET` returns information about the feed.
@@ -212,89 +210,49 @@ GET https://service/myfeed
 Example response:
 ```json
 {
-    "id": "21c8eb10-ee46-11ed-86e5-4776acbe8530",
     "partitions": [
       {
-        "id": 0,
-        "name": "db1/split3/foo",
+        "id": "0",
         "lastCursor": "f1ceaa92eb7c11eda43d6fb319691265",
-        "lastOccurenceTime": "2023-05-05T21:43:01",
         "closed": true
       },
       {
-        "id": 16000,
-        "name": "db2/split5/bar",
-        "startsAfterPartition": 0
+        "id": "16000",
+        "startsAfterPartition": "0"
       }
     ],
-    "authorizationExpiry": "2023-05-05 21:50:23",
     "stream": true,
     "exactlyOnce": true,
-    "links": [
-      {"type": "jsonschema", "path": ".jsonschema"}
-    ],
-    "headers": {
-      "key1": "value1",
-    },
+    "filters": ["subject"]
 }
 ```
 
 ### partitions
 
-Lists the partitions of the feed. In general this list
-should *only be added to*. However, clients should deal gracefully
-with partitions that are suddenly gone and should treat these
-as closed.
+Lists the partitions of the feed. Details about how this works
+documented above.
 
 Fields:
 
-* **id**: Integer ID in the range `[0..32767]`. The ID is a 16-bit
+* `id`: String, but only allowed values is integers in the range `[0..32767]`. The ID is a 16-bit
   integer because it may be convenient for the consumer to put this
   in the primary key in the destination database, and because the
   producer is in a position to easily manage a restricted ID space.
+  * This is an integer for compatability with version 1; but
+    in general in JSON it is good form that IDs are strings even if
+    they are integers.
 
-* **name** (optional): A description of the partition, in case this
-  makes sense to provide.
+* `closed`: If set, it is guaranteed that no new events will appear on this feed.
 
-* **closed**: If set, it is guaranteed that no new events will appear on this feed.
-
-* **lastCursor**: Required if partition is closed, optional otherwise.
+* `lastCursor`: Required if partition is closed, optional otherwise.
   Provides the last cursor on the feed at the time of the poll.
   
-* **startsAfterPartition** and **cursorFromPartitions**: Optional. Used
+* `startsAfterPartition` and `cursorFromPartitions`: Optional. Used
   to change the number of partitions; in each case either one mechanism
   or the other one is used. See section above for description.
 
-### Feed metadata
-
-* **id** is a UUID that identifies the feed. It should simply be hard-coded in the
-  publisher and should never change. This is useful so that caches/cursors
-  can safely be re-used even if the HTTP endpoint that is used is moved around.
-* **headers** is a free form key-value store that provides generic metadata
-  about the feed.
-* **links** is a list of links to further information about the event format.
-  (This may be a schema, or it can e.g. be details about mapping the event from
-  JSON to SQL/Parquet, etc.)
-  Rules for the links:
-  1) Relative, `".jsonschema"` would be served at `https://service/myfeed/.jsonschema`.
-     In this case, the same `Authorization` header should be used.
-  
-  2) Absolute, so `"/myfeed/.jsonschema"` can be used to point to the same place.
-     In this case, the `Authorization` header **MUST** be blank. The request
-     could end up in an API gateway and go to another service, and we want to avoid
-     a compromised service being used in an attack at another service.
-     
-  3) External; `"https://anotherservice/some-jsonschema"`. Again, the `Authorization`
-     header must be blank in this case.
-
-  4) Relative paths in another subtree, `"../schemas/myevent"` is **disallowed**.
-     This is again to avoid CSRF, that the client is using an `Authorization`
-     header but the API gateway routes it to another service.
-
-### Security
-
-* **authorizationExpiry** replies back the time the authorization token
-  used expires. This is useful for caching proxies to do federated authorization.
+* `filters`: A list of additional filter flags that are supported.
+  See `filter-*` below.
 
 ### Flags
 
@@ -303,8 +261,8 @@ with more information). The list will likely be extended in the future.
 
 Currently supported flags:
 
-* **stream**: The stream argument is supported. See below.
-* **exactlyOnce**: Each event `id` will always be present exactly
+* `stream`: The stream argument is supported. See below.
+* `exactlyOnce`: Each event `id` will always be present exactly
   once on the feed and never seen again. If this is false, the same
   event `id` may appear several times (usually with the exact same contents,
   indicating a delivery retry further behind in the pipeline,
@@ -318,25 +276,36 @@ Currently supported flags:
 A fetch is done to the same URL as the discovery, but comes with
 some arguments:
 ```
-GET https://service/myfeed?partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265&client=myconsumer
+GET https://service/myfeed?partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265
 ```
 
 Arguments:
 
-* **partition**: ID of partition (see discovery call)
-* **cursor**: The place in the feed to start reading. Special cursors `_first` and `_last`
+* `partition`: ID of partition (see discovery call)
+* `cursor`: The place in the feed to start reading. Special cursors `_first` and `_last`
   can be used for each end of the feed as initial values.
   * In some cases, the publisher may e.g. document that the cursor values are ULID
     or similar. In this case, the consumer constructing a cursor to start in a given
     position is perfectly OK; but outside the scope of this specification.
-* **pageSizeHint**: How many events to return. Not compatible with **stream**.
-* **stream**: Can be set to either a duration in *number of milliseconds*,
+* `pageSizeHint`: How many events to return. Not compatible with **stream**.
+* `stream`: Can be set to either a duration in *number of milliseconds*,
   or `y` which means "infinite". The service will then make the HTTP request
   live for this long, and keep returning events over the link. The effect
   is equivalent to downloading an infinitely large file over HTTP. This works
   fine with the HTTP protocol, but one has to be aware of the effect of any API
   gateways in the middle that may assume short-lived requests. Not compatible
   with **pageSizeHint**.
+* `filter-*`: It is possible to provide additional filter argument to the
+  server. For instance, to get all events that has a given `subject` property,
+  pass `&filter-subject=somevalue`.
+  * The specific filters supported for a FeedAPI endpoint is out of scope
+    for this reference; they are documented by the server (in much the same way
+    as the event payloads).
+  * If a filter is not supported by a server, it should cause a 400 Bad Request
+    response; not be ignored.
+  * Usually the use of a filter will cause a different database index to be used;
+    i.e. the server has to prepare for the use of filters.
+  * Cursors on the event feed are **only valid for the identical set of filters**.
 
 
 ### Response
@@ -399,10 +368,5 @@ In other words, the consumer can *assume* that the cursor is a simple
 cursor into an ordered list, but publishers are free to deviate from this
 model and give non-deterministic responses as long as *ordering that matters*
 is preserved.
-
-
-###
-
-
 
 
