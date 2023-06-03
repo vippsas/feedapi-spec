@@ -23,7 +23,7 @@ arguments. For version 1 (ZeroEventHub) this should result in a 400
 error (ErrNoCursors); for version 2 the result will be the discovery endpoint
 JSON payload documented below.
 
-In the events fetch endpoint, the presence of the argument `?partition=`
+In the events fetch endpoint, the presence of the argument `?token=`
 indicates that the client is using FeedAPI version 2.
 
 
@@ -58,6 +58,13 @@ header; although the exact scheme is out of the scope of this specification.
 
 Standard HTTP 401 and 403 response codes should be used.
 
+## Overall flow
+
+There is currently a *discovery call* and a *fetch call*.
+Consumers call the discovery command once, discover how many partitions
+should be consumed, and then launch one process per consumer issuing
+fetch commands.
+
 ## Partitions
 
 FeedAPI supports a dynamic number of partitions, and several partition
@@ -77,14 +84,14 @@ In order to support a variety of databases and scaling approaches
 there are several different features; the publisher decides which one
 to use and clients should support all of them.
 
-The discovery endpoint's reference manual is below, but for now,
+The discovery command's reference manual is below, but for now,
 this is the relevant section for partitions:
 ```json
 {
+  "token": "afx53",
   "partitions": [
     {
       "id": "0",
-      "lastCursor": "f1ceaa92eb7c11eda43d6fb319691265",
       "closed": true
     },
     {
@@ -98,20 +105,38 @@ this is the relevant section for partitions:
   ]
 }
 ```
+#### Starting new partitions, and the token mechanism
 
-#### Starting and closing partitions
+A new partition can appear in the list at any time. The token
+mechanism is used to make sure clients pick these up and refreshes
+the list of partitions when needed.
 
-A new partition can appear in the list at any time.
-In the future we are likely to
-add a special message "new partition appeared" on *all* event streams when
-this happens to signal live consumers to re-scan the discovery endpoint,
-but this is left out of scope for now.
+The consumer reads the `token` from the discovery response
+and passes it in to all fetch commands. If the publisher wishes
+to trigger consumers to discover new partitions (or other relevant
+changes to the consumption process), it may change the token
+provided in the discovery command, *and* return HTTP error 409 Conflict on the
+events fetch command. Consumers should respond to 409 Conflict by
+re-starting from the discovery phase.
+
+PS: It is not legal for the publisher to only return 409 Conflict for
+some partitions and not others over longer periods of time;
+all partitions should be blocked at
+*approximately* the same point time. This allows consumers to use this
+as a signal for partition processes using old tokens to shut down.
+Consumers should not that this mechanism is not alone in itself to
+prevent against races between partition consumer processes using
+an old an a new token.
+
+#### Stopping partitions
 
 An existing partition that will never again receive writes
 can be marked as `"closed": true`. Consumers should still
 consume it from the start until the end for re-constitution, but they will
 know that no *new* events will appear on it.
 
+Once a partition has been marked as closed, it is forbidden to ever
+again add new events to that partition.
 
 #### Method 1 to change partition count: New events on new partitions
 
@@ -124,7 +149,6 @@ For instance, in this case partition 0 was split into partitions 1 and 2:
   "partitions": [
     {
       "id": "0",
-      "lastCursor": "f1ceaa92eb7c11eda43d6fb319691265",
       "closed": true
     },
     {
@@ -210,10 +234,10 @@ GET https://service/myfeed
 Example response:
 ```json
 {
+    "token": "xf3af",
     "partitions": [
       {
         "id": "0",
-        "lastCursor": "f1ceaa92eb7c11eda43d6fb319691265",
         "closed": true
       },
       {
@@ -227,10 +251,12 @@ Example response:
 }
 ```
 
-### partitions
+### token / partitions
 
-Lists the partitions of the feed. Details about how this works
-documented above.
+See above for documentation on token/partitions
+fields.
+
+The `token` field is an arbitrary string.
 
 Fields:
 
@@ -244,31 +270,10 @@ Fields:
 
 * `closed`: If set, it is guaranteed that no new events will appear on this feed.
 
-* `lastCursor`: Required if partition is closed, optional otherwise.
-  Provides the last cursor on the feed at the time of the poll.
-  
 * `startsAfterPartition` and `cursorFromPartitions`: Optional. Used
   to change the number of partitions; in each case either one mechanism
   or the other one is used. See section above for description.
 
-* `filters`: A list of additional filter flags that are supported.
-  See `filter-*` below.
-
-### Flags
-
-Protocol flags are provided as fields on the root (boolean or sub-structs
-with more information). The list will likely be extended in the future.
-
-Currently supported flags:
-
-* `stream`: The stream argument is supported. See below.
-* `exactlyOnce`: Each event `id` will always be present exactly
-  once on the feed and never seen again. If this is false, the same
-  event `id` may appear several times (usually with the exact same contents,
-  indicating a delivery retry further behind in the pipeline,
-  although any such guarantees is application specific).
-  For instance, an adaptor on top of Azure Event Hub should set
-  `exactlyOnce` to `false`.
 
 ## Fetch call
 
@@ -276,11 +281,12 @@ Currently supported flags:
 A fetch is done to the same URL as the discovery, but comes with
 some arguments:
 ```
-GET https://service/myfeed?partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265
+GET https://service/myfeed?token=xaf32&partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265
 ```
 
 Arguments:
 
+* `token`: Pass pack the string received in the discovery endpoint.
 * `partition`: ID of partition (see discovery call)
 * `cursor`: The place in the feed to start reading. Special cursors `_first` and `_last`
   can be used for each end of the feed as initial values.
