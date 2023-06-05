@@ -301,17 +301,6 @@ Arguments:
   fine with the HTTP protocol, but one has to be aware of the effect of any API
   gateways in the middle that may assume short-lived requests. Not compatible
   with **pageSizeHint**.
-* `filter-*`: It is possible to provide additional filter argument to the
-  server. For instance, to get all events that has a given `subject` property,
-  pass `&filter-subject=somevalue`.
-  * The specific filters supported for a FeedAPI endpoint is out of scope
-    for this reference; they are documented by the server (in much the same way
-    as the event payloads).
-  * If a filter is not supported by a server, it should cause a 400 Bad Request
-    response; not be ignored.
-  * Usually the use of a filter will cause a different database index to be used;
-    i.e. the server has to prepare for the use of filters.
-  * Cursors on the event feed are **only valid for the identical set of filters**.
 
 
 ### Response
@@ -320,14 +309,14 @@ a protocol message from the publisher to consumer. The reason for this format
 is to be able to *stream* events, which would not be as easy with a more
 usual JSON response using a JSON list.
 ```
-{"event": {/*...payload... */}}
+{"data": {/*...payload... */}}
 {"cursor": "2394r7a98a7342qw34r2412rwa"}
-{"event": {/*...payload... */}}
+{"data": {/*...payload... */}}
 {"cursor": "24rw3afawowraqwl2ijur3lakj"}
 ```
 
 There are 2 kinds of commands:
-* If `event` is present, the line contains an individual event
+* If `data` is present, the line contains an individual event
 * If `cursor` is present, the line is a checkpoint.
 
 Consumers should gracefully handle not only new unknown fields
