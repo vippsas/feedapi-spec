@@ -26,6 +26,44 @@ JSON payload documented below.
 In the events fetch endpoint, the presence of the argument `?token=`
 indicates that the client is using FeedAPI version 2.
 
+## TL;DR
+
+The TL;DR of the protocol is that the first call a consumer does is to list partitions:
+
+```
+GET https://myservice/myfeed
+```
+
+Response:
+```json
+{
+    "token": "1",  // change this if you change number of partitions
+    "partitions": [
+      {
+        "id": "0",
+        // Extra options here used when changing number of partitions / re-scale.
+        // Publishers who don't change number of partitions don't need to worry about this.
+      },
+    ],
+    "stream": false,
+    "exactlyOnce": true,  // false if you may re-publish over FeedAPI
+}
+```
+
+Then, the next call is to start consuming from start is:
+
+```
+GET https://myservice/myfeed?token=1&partition=0&cursor=_first
+```
+
+Response is in NDJSON-format:
+
+```json
+{"data": {...}}
+{"cursor": "2423423423"}
+{"data": {...}}
+{"cursor": "2423423424"}
+```
 
 ## Endpoint name
 
@@ -322,8 +360,6 @@ There are 2 kinds of commands:
 Consumers should gracefully handle not only new unknown fields
 in the JSON objects (as is usual), but also ignore entirely new
 commands (i.e., lines not containing either `event` nor `cursor`).
-In particular a command saying "please re-sync the partition list"
-is likely to be added in the future.
 
 #### Event command
 
