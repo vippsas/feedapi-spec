@@ -34,7 +34,9 @@ indicates that the client is using FeedAPI version 2.
 
 ## Protocol TL;DR
 
-The TL;DR of the protocol is that the first call a consumer does is to list partitions:
+The TL;DR of the protocol is that first
+the consumer calls the discovery endpoint
+to list partitions:
 
 ```
 GET https://myservice/myfeed
@@ -51,15 +53,15 @@ Response:
         // Publishers who don't change number of partitions don't need to worry about this.
       },
     ],
-    "stream": false,
     "exactlyOnce": true,  // false if you may re-publish over FeedAPI
 }
 ```
 
-Then, the next call is to start consuming from start is:
+Then, the next call is to the "/events" endpoint below the discovery
+endpoint to consume events:
 
 ```
-GET https://myservice/myfeed?token=1&partition=0&cursor=_first
+GET https://myservice/myfeed/events?token=1&partition=0&cursor=_first
 ```
 
 Response is in NDJSON-format:
@@ -68,30 +70,10 @@ Response is in NDJSON-format:
 {"data": {...}}
 {"cursor": "2423423423"}
 {"data": {...}}
+{"data": {...}}
+{"data": {...}}
 {"cursor": "2423423424"}
 ```
-
-## Single HTTP endpoint
-
-FeedAPI is using HTTP, but it is **not** REST. OpenAPI / Swagger etc.
-is a bad fit for describing FeedAPI.
-
-All communication for a given
-event feed happens on a *single* request path.
-I.e., the protocol will not use elements of the request path.
-
-Why?
-
-* This is how version 1 works and we want minimal changes.
-* Easier to develop the protocol in server libraries without
-  hooking into how requests are routed to handlers
-* The users will use FeedAPI libraries to connect anyway
-* FeedAPI is not REST and does not work well with OpenAPI, Swagger, etc anyway.
-* A single endpoint per feed is easier to relate to in
-  API gateways and so on
-
-Below `https://service/myfeed` is used as a placeholder in examples
-for an arbitrary endpoint name.
 
 ## Authorization
 
@@ -100,15 +82,8 @@ header; although the exact scheme is out of the scope of this specification.
 
 Standard HTTP 401 and 403 response codes should be used.
 
-## Overall flow
 
-There is currently a *discovery call* and a *fetch call*.
-Consumers call discovery once, discover how many partitions
-should be consumed, and then launch one process per consumer issuing
-fetch calls.
-
-
-## Discovery call
+## Discovery endpoint
 
 A simple argument-less `GET` returns information about the feed.
 ```
@@ -128,7 +103,6 @@ Example response:
         "startsAfterPartition": "0"
       }
     ],
-    "stream": true,
     "exactlyOnce": true,
 }
 ```
@@ -156,7 +130,6 @@ of each partition:
     to change the number of [partitions](#partitions).
 
 #### Other fields
-* `stream`: True if the `?stream` flag is support by the Fetch call.
 * `exactlyOnce`: True if the publisher guarantees that the same event
   `id` will never be seen twice by a consumer; i.e., exactly-once consumption
   patterns may be used. If this is set to `false`, events are seen at-least-once
@@ -168,13 +141,13 @@ to develop the protocol in a backwards-compatible
 manner.
 
 
-## Fetch call
+## Events endpoint
 
 ### Request
-A fetch is done to the same URL as the discovery, but comes with
-some arguments:
+A fetch is done to the same URL as the discovery with
+the addition of `/events`.
 ```
-GET https://service/myfeed?token=xaf32&partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265
+GET https://service/myfeed/events?token=xaf32&partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265
 ```
 
 Arguments:
@@ -189,16 +162,7 @@ Arguments:
     or similar. In this case, the consumer constructing a cursor to start in a given
     position is perfectly OK; but outside the scope of this specification.
 
-`pageSizeHint`: How many events to return. Not compatible with `stream`.
-
-`stream`: Can be set to either a duration in *number of milliseconds*,
-or `y` which means "infinite". The service will then make the HTTP request
-live for this long, and keep returning events over the link. The effect
-is equivalent to downloading an infinitely large file over HTTP. This works
-fine with the HTTP protocol, but one has to be aware of the effect of any API
-gateways in the middle that may assume short-lived requests. Not compatible
-with `pageSizeHint`.
-
+`pagesizehint` (optional): How many events to return.
 
 ### Response
 The response is in the NDJSON format; each line (separated by `\n`) represents
@@ -208,6 +172,8 @@ usual JSON response using a JSON list.
 ```
 {"data": {/*...payload... */}}
 {"cursor": "2394r7a98a7342qw34r2412rwa"}
+{"data": {/*...payload... */}}
+{"data": {/*...payload... */}}
 {"data": {/*...payload... */}}
 {"cursor": "24rw3afawowraqwl2ijur3lakj"}
 ```
