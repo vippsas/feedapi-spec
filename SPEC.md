@@ -20,13 +20,13 @@ a longer period of time.
 unused. I.e., `cursor0=..&cursor1=..` has never been used and should
 never be used.
 
-* The headers feature is similarly deprecated 
+* The headers feature is similarly deprecated. 
 
 #### Protocol negotiation
 
 FeedAPI clients should start with a simple `GET` to the FeedAPI endpoint without any
 arguments. For version 1 (ZeroEventHub) this should result in a 400
-error (ErrNoCursors); for version 2 the result will be the discovery endpoint
+error; for version 2 the result will be the discovery endpoint
 JSON payload documented below.
 
 In the events fetch endpoint, the presence of the argument `?token=`
@@ -120,7 +120,7 @@ of each partition:
     integer because it may be convenient for the consumer to put this
     in the primary key in the destination database, and because the
     producer is in a position to easily manage a restricted ID space.
-    * This is an integer for compatability with version 1; but
+    * This is an integer for compatibility with version 1; but
       in general in JSON it is good form that IDs are strings even if
       they are integers.
 
@@ -158,11 +158,12 @@ Arguments:
 
 `cursor`: The place in the feed to start reading. Special cursors `_first` and `_last`
   can be used for each end of the feed as initial values.
-  * In some cases, the publisher may e.g. document that the cursor values are ULID
-    or similar. In this case, the consumer constructing a cursor to start in a given
-    position is perfectly OK; but outside the scope of this specification.
 
 `pagesizehint` (optional): How many events to return.
+  As indicated by the argument name, this is a *hint*,
+  and consumers should be prepared to receive fewer or
+  more events than requested. If not specified,
+  an implementation-dependent default is used.
 
 ### Response
 The response is in the NDJSON format; each line (separated by `\n`) represents
@@ -192,10 +193,20 @@ The event payload contained in the `data` key. This can *either* be
 a string (e.g., a binary representation) *or* an embedded JSON document
 in any format. (The value being JSON list, number or bool is not supported.)
 
+The payload can be either be a JSON sub-struct, or a string for any other kind of
+data (such as binary).
+Note that `{"data": ...}` is the FeedAPI *envelope* and not part of the event;
+for instance, if one is following the Cloudevents spec, then a line from FeedAPI
+will be
+```json
+{"data": {"id":  "3q432e", "data": {...}, "time": "..."}}
+```
+So, one `data` within another `data`.
+
 #### Checkpoint command
 
 Every response **must** always return at least one `cursor`, even if there
-is no new `data`s available. Consumers should update cursors even if there
+are no new `data` elements available. Consumers should update cursors even if there
 are no new events. For instance, the publisher could be filtering away
 a lot of internal events to produce the external feed, and being able to
 make progress also in the case of no new (external) events is important.
@@ -269,7 +280,7 @@ this is the relevant section for partitions:
 #### Starting new partitions, and the token mechanism
 
 A new partition can appear in the list at any time. The token
-mechanism is used to make sure clients pick these up and refreshes
+mechanism is used to make sure clients pick these up and refresh
 the list of partitions when needed.
 
 The consumer reads the `token` from the discovery response
