@@ -11,10 +11,16 @@ at explaining concepts.
 [ZeroEventHub](https://github.com/vippsas/zeroeventhub/blob/main/SPEC.md) is considered "version 1" of this
 protocol, and this spec is considered "version 2".
 
-FeedAPI server and client libraries are expected to support *both* versions for
-a longer period of time; with the exception that the multiple-partition-per-call
-feature of version 1 is unused and will remain unused. I.e., `cursor0=..&cursor1=..`
-has never been used and should never be used.
+FeedAPI client libraries are expected to support *both* versions for
+a longer period of time.
+
+#### Deprecation of ZeroEventHub v1 features
+
+* The multiple-partition-per-call feature of version 1 is unused and will remain
+unused. I.e., `cursor0=..&cursor1=..` has never been used and should
+never be used.
+
+* The headers feature is similarly deprecated 
 
 #### Protocol negotiation
 
@@ -26,7 +32,7 @@ JSON payload documented below.
 In the events fetch endpoint, the presence of the argument `?token=`
 indicates that the client is using FeedAPI version 2.
 
-## TL;DR
+## Protocol TL;DR
 
 The TL;DR of the protocol is that the first call a consumer does is to list partitions:
 
@@ -65,24 +71,22 @@ Response is in NDJSON-format:
 {"cursor": "2423423424"}
 ```
 
-## Endpoint name
+## Single HTTP endpoint
 
-FeedAPI is using RPC over HTTP. All communication for a given
+FeedAPI is using HTTP, but it is **not** REST. OpenAPI / Swagger etc.
+is a bad fit for describing FeedAPI.
+
+All communication for a given
 event feed happens on a *single* request path.
-
-I.e., the protocol will not use elements of the request path,
-e.g., to specify partition or version or similar.
+I.e., the protocol will not use elements of the request path.
 
 Why?
 
-* This is how version 1 works. It will be simpler to keep using
-  the same endpoints for version 1 of the protocol and version 2.
-* Easier to develop the protocol in the server libraries, without having
-  changes to also have to propagate to the request path routing
-  in the service (of which there
-  may be several ways to do things for each language)
+* This is how version 1 works and we want minimal changes.
+* Easier to develop the protocol in server libraries without
+  hooking into how requests are routed to handlers
 * The users will use FeedAPI libraries to connect anyway
-* FeedAPI does not work well with OpenAPI, Swagger, etc anyway.
+* FeedAPI is not REST and does not work well with OpenAPI, Swagger, etc anyway.
 * A single endpoint per feed is easier to relate to in
   API gateways and so on
 
@@ -99,9 +103,162 @@ Standard HTTP 401 and 403 response codes should be used.
 ## Overall flow
 
 There is currently a *discovery call* and a *fetch call*.
-Consumers call the discovery command once, discover how many partitions
+Consumers call discovery once, discover how many partitions
 should be consumed, and then launch one process per consumer issuing
-fetch commands.
+fetch calls.
+
+
+## Discovery call
+
+A simple argument-less `GET` returns information about the feed.
+```
+GET https://service/myfeed
+```
+Example response:
+```json
+{
+    "token": "xf3af",
+    "partitions": [
+      {
+        "id": "0",
+        "closed": true
+      },
+      {
+        "id": "16000",
+        "startsAfterPartition": "0"
+      }
+    ],
+    "stream": true,
+    "exactlyOnce": true,
+}
+```
+
+#### Partitioning-related fields
+
+`token`: Arbitrary string. Consumers must pass the same token
+ back in the Fetch call. See [Partitions](#partitions) below for more information.
+ 
+`partitions`: Lists the partitions that should be consumed.
+See [Partitions](#partitions) below for more information. Fields
+of each partition:
+
+* `id`: String, but only allowed values is integers in the range `[0..32767]`. The ID is a 16-bit
+    integer because it may be convenient for the consumer to put this
+    in the primary key in the destination database, and because the
+    producer is in a position to easily manage a restricted ID space.
+    * This is an integer for compatability with version 1; but
+      in general in JSON it is good form that IDs are strings even if
+      they are integers.
+
+  * `closed`: If set, it is guaranteed that no new events will appear on this feed.
+
+  * `startsAfterPartition` and `cursorFromPartitions`: Optional. Used
+    to change the number of [partitions](#partitions).
+
+#### Other fields
+* `stream`: True if the `?stream` flag is support by the Fetch call.
+* `exactlyOnce`: True if the publisher guarantees that the same event
+  `id` will never be seen twice by a consumer; i.e., exactly-once consumption
+  patterns may be used. If this is set to `false`, events are seen at-least-once
+  and the consumer has to be idempotent / de-duplicate events.
+
+
+More flags are expected to be added later, in order
+to develop the protocol in a backwards-compatible
+manner.
+
+
+## Fetch call
+
+### Request
+A fetch is done to the same URL as the discovery, but comes with
+some arguments:
+```
+GET https://service/myfeed?token=xaf32&partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265
+```
+
+Arguments:
+
+`token`: Pass pack the string received in the discovery endpoint.
+ 
+`partition`: ID of partition (see discovery call)
+
+`cursor`: The place in the feed to start reading. Special cursors `_first` and `_last`
+  can be used for each end of the feed as initial values.
+  * In some cases, the publisher may e.g. document that the cursor values are ULID
+    or similar. In this case, the consumer constructing a cursor to start in a given
+    position is perfectly OK; but outside the scope of this specification.
+
+`pageSizeHint`: How many events to return. Not compatible with `stream`.
+
+`stream`: Can be set to either a duration in *number of milliseconds*,
+or `y` which means "infinite". The service will then make the HTTP request
+live for this long, and keep returning events over the link. The effect
+is equivalent to downloading an infinitely large file over HTTP. This works
+fine with the HTTP protocol, but one has to be aware of the effect of any API
+gateways in the middle that may assume short-lived requests. Not compatible
+with `pageSizeHint`.
+
+
+### Response
+The response is in the NDJSON format; each line (separated by `\n`) represents
+a protocol message from the publisher to consumer. The reason for this format
+is to be able to *stream* events, which would not be as easy with a more
+usual JSON response using a JSON list.
+```
+{"data": {/*...payload... */}}
+{"cursor": "2394r7a98a7342qw34r2412rwa"}
+{"data": {/*...payload... */}}
+{"cursor": "24rw3afawowraqwl2ijur3lakj"}
+```
+
+There are 2 kinds of commands:
+* If `data` is present, the line contains an individual event
+* If `cursor` is present, the line is a checkpoint.
+
+Consumers should gracefully handle not only new unknown fields
+in the JSON objects (as is usual), but also ignore entirely new
+commands (i.e., lines not containing either `data` nor `cursor`).
+
+#### Event command
+
+The event payload contained in the `data` key. This can *either* be
+a string (e.g., a binary representation) *or* an embedded JSON document
+in any format. (The value being JSON list, number or bool is not supported.)
+
+#### Checkpoint command
+
+Every response **must** always return at least one `cursor`, even if there
+is no new `data`s available. Consumers should update cursors even if there
+are no new events. For instance, the publisher could be filtering away
+a lot of internal events to produce the external feed, and being able to
+make progress also in the case of no new (external) events is important.
+
+Some publishers may emit a checkpoint for every event, others may
+list several events between checkpoint.
+
+In general, events transported over FeedAPI follow the
+*partitioned log* event communication model of Kafka, Event Hub, etc;
+i.e., events should arrive in-order and should be processed in the
+order they are received in the response.
+
+*However*, there is no guarantee that two requests
+from a given `cursor` will produce an identical response each time.
+This is because while from the perspective of the API we are consuming
+a single partition, the server *could* be emulating this behaviour
+from a larger set of real physical partitions, and it may be that
+returning data from the underlying partitions happen in a non-deterministic
+manner to minimize latency. What is important is:
+
+* The client should consider events ordered in the order they arrive in
+* Any ordering between events *that matters* should be reproducible
+  (typically, events for a single aggregate (entity/object)).
+
+In other words, the consumer can *assume* that the cursor is a simple
+cursor into an ordered list, but publishers are free to deviate from this
+model and give non-deterministic responses as long as *ordering that matters*
+is preserved.
+
 
 ## Partitions
 
@@ -162,9 +319,6 @@ some partitions and not others over longer periods of time;
 all partitions should be blocked at
 *approximately* the same point time. This allows consumers to use this
 as a signal for partition processes using old tokens to shut down.
-Consumers should not that this mechanism is not alone in itself to
-prevent against races between partition consumer processes using
-an old an a new token.
 
 #### Stopping partitions
 
@@ -262,142 +416,3 @@ continue ordered event consumption.
 Note that `cursorFromPartitions` is a list. It lists *all* partitions
 one may transfer a cursor from. For instance this can be the path through
 an inheritance tree to the root (first parent, then grand-parent, and so on).
-
-## Discovery call
-
-A simple argument-less `GET` returns information about the feed.
-```
-GET https://service/myfeed
-```
-Example response:
-```json
-{
-    "token": "xf3af",
-    "partitions": [
-      {
-        "id": "0",
-        "closed": true
-      },
-      {
-        "id": "16000",
-        "startsAfterPartition": "0"
-      }
-    ],
-    "stream": true,
-    "exactlyOnce": true,
-    "filters": ["subject"]
-}
-```
-
-### token / partitions
-
-See above for documentation on token/partitions
-fields.
-
-The `token` field is an arbitrary string.
-
-Fields:
-
-* `id`: String, but only allowed values is integers in the range `[0..32767]`. The ID is a 16-bit
-  integer because it may be convenient for the consumer to put this
-  in the primary key in the destination database, and because the
-  producer is in a position to easily manage a restricted ID space.
-  * This is an integer for compatability with version 1; but
-    in general in JSON it is good form that IDs are strings even if
-    they are integers.
-
-* `closed`: If set, it is guaranteed that no new events will appear on this feed.
-
-* `startsAfterPartition` and `cursorFromPartitions`: Optional. Used
-  to change the number of partitions; in each case either one mechanism
-  or the other one is used. See section above for description.
-
-
-## Fetch call
-
-### Request
-A fetch is done to the same URL as the discovery, but comes with
-some arguments:
-```
-GET https://service/myfeed?token=xaf32&partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265
-```
-
-Arguments:
-
-* `token`: Pass pack the string received in the discovery endpoint.
-* `partition`: ID of partition (see discovery call)
-* `cursor`: The place in the feed to start reading. Special cursors `_first` and `_last`
-  can be used for each end of the feed as initial values.
-  * In some cases, the publisher may e.g. document that the cursor values are ULID
-    or similar. In this case, the consumer constructing a cursor to start in a given
-    position is perfectly OK; but outside the scope of this specification.
-* `pageSizeHint`: How many events to return. Not compatible with **stream**.
-* `stream`: Can be set to either a duration in *number of milliseconds*,
-  or `y` which means "infinite". The service will then make the HTTP request
-  live for this long, and keep returning events over the link. The effect
-  is equivalent to downloading an infinitely large file over HTTP. This works
-  fine with the HTTP protocol, but one has to be aware of the effect of any API
-  gateways in the middle that may assume short-lived requests. Not compatible
-  with **pageSizeHint**.
-
-
-### Response
-The response is in the NDJSON format; each line (separated by `\n`) represents
-a protocol message from the publisher to consumer. The reason for this format
-is to be able to *stream* events, which would not be as easy with a more
-usual JSON response using a JSON list.
-```
-{"data": {/*...payload... */}}
-{"cursor": "2394r7a98a7342qw34r2412rwa"}
-{"data": {/*...payload... */}}
-{"cursor": "24rw3afawowraqwl2ijur3lakj"}
-```
-
-There are 2 kinds of commands:
-* If `data` is present, the line contains an individual event
-* If `cursor` is present, the line is a checkpoint.
-
-Consumers should gracefully handle not only new unknown fields
-in the JSON objects (as is usual), but also ignore entirely new
-commands (i.e., lines not containing either `event` nor `cursor`).
-
-#### Event command
-
-The event payload contained in the `event` key. This can *either* be
-a string (e.g., a binary representation) *or* an embedded JSON document
-in any format. (The value being JSON list, number or bool is not supported.)
-
-#### Checkpoint command
-
-Every response **must** always return at least one `cursor`, even if there
-is no new `event`s available. Consumers should update cursors even if there
-are no new events. For instance, the publisher could be filtering away
-a lot of internal events to produce the external feed, and being able to
-make progress also in the case of no new (external) events is important.
-
-Some publishers may emit a checkpoint for every event, others may
-list several events between checkpoint.
-
-In general, events transported over FeedAPI follow the
-*partitioned log* event communication model of Kafka, Event Hub, etc;
-i.e., events should arrive in-order and should be processed in the
-order they are received in the response.
-
-*However*, there is no guarantee that two requests
-from a given `cursor` will produce an identical response each time.
-This is because while from the perspective of the API we are consuming
-a single partition, the server *could* be emulating this behaviour
-from a larger set of real physical partitions, and it may be that
-returning data from the underlying partitions happen in a non-deterministic
-manner to minimize latency. What is important is:
-
-* The client should consider events ordered in the order they arrive in
-* Any ordering between events *that matters* should be reproducible
-  (typically, events for a single aggregate (entity/object)).
-
-In other words, the consumer can *assume* that the cursor is a simple
-cursor into an ordered list, but publishers are free to deviate from this
-model and give non-deterministic responses as long as *ordering that matters*
-is preserved.
-
-
