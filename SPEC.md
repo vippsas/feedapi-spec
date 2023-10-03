@@ -1,36 +1,102 @@
 # FeedAPI specification
 
-## Context
+## Overview
 
-For now, this documentation is a working document for people
-very familiar with ZeroEventHub; therefore no attempt is made
-at explaining concepts.
+This spec details an HTTP API that:
 
-## Versioning
+1) Allows a service to publish events to an arbitrary number of subscribers
+   without going through an event broker (such as Kafa or Azure Event Hub).
 
-[ZeroEventHub](https://github.com/vippsas/zeroeventhub/blob/main/SPEC.md) is considered "version 1" of this
-protocol, and this spec is considered "version 2".
+2) Can work as a supplement to a broker. It uses the same basic
+   model and services can offer it *in addition* to publishing on a broker.
 
-FeedAPI client libraries are expected to support *both* versions for
-a longer period of time.
+3) Even for consumers opting to consume through brokers instead, the
+   API is a convenient alternative if one needs to backfill older data.
 
-#### Deprecation of ZeroEventHub v1 features
+A parallel is ZeroMQ. In 2007 ZeroMQ launched as a framework and
+series of patterns for doing message passing "better" without broker;
+it turned out that for message passing, many applications become more
+robust and scalable simply by removing the broker.
 
-* The multiple-partition-per-call feature of version 1 is unused and will remain
-unused. I.e., `cursor0=..&cursor1=..` has never been used and should
-never be used.
+This spec attempts the same for Kafka-style event channels.
 
-* The headers feature is similarly deprecated. 
+## Goal of proposal
 
-#### Protocol negotiation
+Async events through a broker has some benefits:
 
-FeedAPI clients should start with a simple `GET` to the FeedAPI endpoint without any
-arguments. For version 1 (ZeroEventHub) this should result in a 400
-error; for version 2 the result will be the discovery endpoint
-JSON payload documented below.
+* Events defined in standard contracts, culture of centralizing
+  events as source of truth
 
-In the events fetch endpoint, the presence of the argument `?token=`
-indicates that the client is using FeedAPI version 2.
+* Events can be transmitted without producer depending on consumer being alive
+  and receiving, and possibly needing to implement retries (as callbacks require)
+
+There are also some problems:
+
+* With a broker you don't have consistency; you don't know that if you did
+  something with a service the effect will be on the event feed the moment
+  you get a response.
+
+* A broker adds a latency that is not directly controllable and
+  may in certain "tight" situations add operational risk.
+
+* A broker adds a extra piece of infra that must be up, which may be
+  a liability on a critical path. Abusing a famous quote: "The only
+  problem that cannot be solved by adding another moving piece is too
+  many moving pieces."
+
+The goal of this spec is to keep most of the first advantages, while eliminating
+these latter problems.
+
+The scope is primarily a backend producer which sits on top of a
+database and first commits new state to the database, before
+publishing events of what has happened and already been committed to
+a broker. We are aware that brokers can have other usecases and
+this spec may be less relevant for such usecases.
+
+## Q & A
+
+**What if the consumer goes down?**
+
+The publisher doesn't know about consumers in this spec. The pattern
+allow consumers to resume at any point, just like with a broker.
+
+**What if the publisher goes down?**
+
+In this situation a broker would seem to give higher uptime, *but, consider:*
+
+Scenario 1: The consumer is OK with some latency and consumes
+irregularly/lazily/in a batch.  In such a scenario, it may often be OK
+that events are delayed a bit more if the producer is down.
+
+Scenario 2: The consumer needs minimal latency. In this situation the consumer
+hogs the feed and reads events as soon as they are published.
+Now... when the producer goes down, new events will also stop! A broker
+actually doesn't help in this scenario. A very few events may have been caused
+by the producer but not read by the consumer, but it is also the case that a few
+events may have been caused by the producer but not yet been written to Event Hub
+when the publisher went down. So this is the same as with a broker.
+
+**What about load on the publisher?**
+
+In situations where the number of consumers is very high and all are reading a lot
+of data this is a legitimate advantage of a broker as it helps distribute
+the load of reading events.
+
+However, in general the load needed to simply serve out events to a few
+other services that need them is a minor part of the load of a typical
+backend service. Due to the entirely stateless nature of
+the FeedAPI protocol, it is easy enough to cache recent event history
+in memory.
+
+**Why not an existing API spec?**
+
+If you know about one we'd love to use it instead of NIH.
+
+The closest thing we found is Atom / RSS. But these are really made
+for other usecases and in particular don't have features for sharding
+or consumer groups. We would need to extend them anyway -- at that
+point it is better to make something a lot simpler than those
+standards.
 
 ## Protocol TL;DR
 
@@ -393,3 +459,29 @@ continue ordered event consumption.
 Note that `cursorFromPartitions` is a list. It lists *all* partitions
 one may transfer a cursor from. For instance this can be the path through
 an inheritance tree to the root (first parent, then grand-parent, and so on).
+
+## Versioning
+
+[ZeroEventHub](https://github.com/vippsas/zeroeventhub/blob/main/SPEC.md) is considered "version 1" of this
+protocol, and this spec is considered "version 2".
+
+FeedAPI client libraries are expected to support *both* versions for
+a longer period of time.
+
+#### Deprecation of ZeroEventHub v1 features
+
+* The multiple-partition-per-call feature of version 1 is unused and will remain
+  unused. I.e., `cursor0=..&cursor1=..` has never been used and should
+  never be used.
+
+* The headers feature is similarly deprecated.
+
+#### Protocol negotiation
+
+FeedAPI clients should start with a simple `GET` to the FeedAPI endpoint without any
+arguments. For version 1 (ZeroEventHub) this should result in a 400
+error; for version 2 the result will be the discovery endpoint
+JSON payload documented below.
+
+In the events fetch endpoint, the presence of the argument `?token=`
+indicates that the client is using FeedAPI version 2.
