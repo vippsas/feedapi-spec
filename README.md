@@ -16,7 +16,7 @@ listening to changes that are relevant to them.
 
 Usually, a broker such as [Apache Kafka](https://kafka.apache.org/)
 is used to communicate these events. In some contexts
-we found that such a broker does add much value,
+we found that such a broker does not add much value,
 and that a *peer-to-peer* event topology works well.
 By not using a broker, certain complexities disappear.
 For instance, **exactly-once delivery becomes possible** all
