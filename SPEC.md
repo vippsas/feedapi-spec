@@ -231,6 +231,18 @@ Arguments:
   more events than requested. If not specified,
   an implementation-dependent default is used.
 
+`start`, `stop` (optional): Timestamps specifying the start of the
+  *segment* to fetch (see section on segments below).
+  `start` is inclusive, `stop` is exclusive.
+  Format e.g. `2012-04-21T18:25:43-05:00`, `2012-04-21T18:25:43Z`.
+  The client can use   any timezone, the semantic meaning is of a timestamp
+  regardless of timezone and the server will translate to whatever
+  representation of time is useful internally.
+  If and only if `start` is provided, it is possible to get `_done`
+  back as a cursor; this means that the cursor has passed the point
+  in the stream indicated by `stop`.
+
+
 ### Response
 The response is in the NDJSON format; each line (separated by `\n`) represents
 a protocol message from the publisher to consumer. The reason for this format
@@ -277,6 +289,12 @@ are no new events. For instance, the publisher could be filtering away
 a lot of internal events to produce the external feed, and being able to
 make progress also in the case of no new (external) events is important.
 
+The returned cursor can in some cases be an empty string. This means consumption
+is "done". This can happen in two cases:
+* The partition has been closed and will never receive new events
+  (typically replaced by another number of partitions)
+* The `stop` argument is in use, and consumption has passed the stop-point.
+
 Some publishers may emit a checkpoint for every event, others may
 list several events between checkpoint.
 
@@ -301,6 +319,80 @@ In other words, the consumer can *assume* that the cursor is a simple
 cursor into an ordered list, but publishers are free to deviate from this
 model and give non-deterministic responses as long as *ordering that matters*
 is preserved.
+
+## Segments
+
+The parameters `start` and `stop` allows specifying a time-based *segment* of the
+event stream to consume; events outside of this range is excluded. Except for this exclusion,
+the API works as when these arguments are not passed;
+in particular it is safe to exchange cursors with and without these arguments.
+
+One usecase is to start consumption at a particular
+point in time, then simply pass the `start` argument as well as `cursor=_first`.
+This will return the first page of events after the `start` timestamp. Once
+one has a cursor, the `start` argument can either stay present or be dropped
+(doesn't matter, as the cursor is past the point of exclusion).
+
+Another usecase is if one wants to consume a large number of historical events,
+and for this purpose increase parallelism to a greater number
+of threads than the number of partitions. For instance, one may which to segment
+a partition into one segment per date, and consume all the dates in parallel.
+In this case the client would:
+* Compute a number of segment cutoffs (e.g., every midnight UTC), `$c1`, `$c2`, ...
+* Start consumption threads:
+    * Thread 1 starts with `?start=$c1&stop=$c2&cursor=_first`,
+    * Thread 2 starts with `?start=$c2&stop=$c1&cursor=_first`, ..
+    * ...and so on. Note that the exact same timestamp that is given to `stop` (exclusive)
+      in the first call should be given to `start` (inclusive) in the next call.
+* Each thread should keep iterating through pages of events, passing in the returned cursor
+  as usual. However, once the cursor passes a cutoff corresponding to the timestamp
+  passed in `stop`, no more events are returned, and the empty string is returned
+  as a cursor to signify that the consumption process has passed the stop-point.
+
+### Non-monotonic time and start/stop as cursor positions
+
+Some event streams do not have the guarantee that the event `time` (whatever timestamp
+in the event payload signifies this) increases as a function of the cursor.
+For instance this is a likely scenario with many systems:
+
+| Cursor | Time in event payload       |
+|--------|-----------------------------|
+| 1234   | 2024-06-30 23:59:59.233 UTC |
+| 1235   | 2024-07-01 00:00:00.123 UTC |
+| 1236   | 2024-06-30 23:59:59.453 UTC |
+| 1237   | 2024-07-01 00:00:00.522 UTC |
+
+Because of this we have the following rules:
+
+* The `start`/`stop` must be considered *hints for purposes of data segmentation*,
+  not a guarantee about what values a `time` payload of the event will have (if the
+  event has a time payload)
+* Each timestamp to `start`/`stop` should translate directly to a specific cursor
+  position.
+* The server must guarantee that the resolution of `start`/`stop` to cursor position
+  is the same on every call!
+
+So for the example above, passing `start=2024-07-01T00:00:00Z&cursor=_first`
+could be equivalent to passing `cursor=1234` (i.e., all events after, not including,
+1234), or `cursor=1236` -- but the server has to make up its mind about one of them
+and use this consistently.
+
+How to implement this in the server? If the cursor has a time-component
+(e.g., cursor is a ULID) the implementation is trivial. However, if the
+cursors are sequential numbers, like in the example above, and time is non-monotonic,
+implementation is a bit harder. A non-intrusive implementation is a binary search:
+
+* Start with taking the last cursor available and round it up to closest `2^n`.
+   * This rounding is **very important** as otherwise you risk finding a different
+     cutoff for each invocation of the endpoint. I.e. this is what guarantees
+     that, in the example above, you return *either* 1234, *or* 1236, but don't
+     oscillate between them.
+   * E.g., in SQL, a binary search can be done using a recursive CTE
+* Do a binary search for the start and/or the stop.
+
+Using a time-based index has some caveats: A simple search for "event with
+lowest timestamp >= `start`" can can be unstable if an event is suddenly
+inserted later with an earlier timestamp.
 
 
 ## Partitions
