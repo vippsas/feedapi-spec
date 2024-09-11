@@ -225,7 +225,7 @@ Arguments:
 `cursor`: The place in the feed to start reading. Special cursors `_first` and `_last`
   can be used for each end of the feed as initial values.
 
-`pagesizehint` (optional): How many events to return.
+`pagesizehint` (optional$^{*}$): How many events to return.
   As indicated by the argument name, this is a *hint*,
   and consumers should be prepared to receive fewer or
   more events than requested. If not specified,
