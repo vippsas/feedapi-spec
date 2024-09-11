@@ -240,6 +240,10 @@ Arguments:
   GET https://service/myfeed/events?event-types=ewallet.preparedepositrequested;ewallet.confirmdepositrequested&token=xaf32&partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265
   ```
 
+  \* Optional parameters are optional, not only for the clients, but also for
+  the implementing servers, e.g. if you request filtering with an `event-types`
+  parameter, the server can disregard it and still return the full stream.
+
 ### Response
 The response is in the NDJSON format; each line (separated by `\n`) represents
 a protocol message from the publisher to consumer. The reason for this format
