@@ -232,9 +232,9 @@ Arguments:
   an implementation-dependent default is used.
 
 `event-types` (optional): If specified, indicate the subset of event types that
-should be returned by the stream. Any events that does not match will be
-skipped. Types should be delimited by ';' and implementations should be case
-insensitive.
+  should be returned by the stream. Any events that does not match will be
+  skipped. Types should be delimited by ';' and implementations should be case
+  insensitive.
 
 ```http
 GET https://service/myfeed/events?event-types=ewallet.preparedepositrequested;ewallet.confirmdepositrequested&token=xaf32&partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265
