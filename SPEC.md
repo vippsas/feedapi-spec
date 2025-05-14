@@ -225,11 +225,23 @@ Arguments:
 `cursor`: The place in the feed to start reading. Special cursors `_first` and `_last`
   can be used for each end of the feed as initial values.
 
-`pagesizehint` (optional): How many events to return.
+`pagesizehint` (optional$^{*}$): How many events to return.
   As indicated by the argument name, this is a *hint*,
   and consumers should be prepared to receive fewer or
   more events than requested. If not specified,
   an implementation-dependent default is used.
+
+`event-types` (optional$^{*}$): If specified, indicates the subset of event types that
+  should be returned by the stream. Any events that do not match will be
+  skipped. Types should be delimited by `;` and implementations should be case-insensitive.
+
+  ```http
+  GET https://service/myfeed/events?event-types=ewallet.preparedepositrequested;ewallet.confirmdepositrequested&token=xaf32&partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265
+  ```
+
+$^{*}$ Optional parameters are optional, not only for the clients, but also for
+  the implementing servers, e.g. if you request filtering with an `event-types`
+  parameter, the server can disregard it and still return the full stream.
 
 ### Response
 The response is in the NDJSON format; each line (separated by `\n`) represents
