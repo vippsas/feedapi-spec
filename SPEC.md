@@ -235,6 +235,10 @@ Arguments:
   should be returned by the stream. Any events that do not match will be
   skipped. Types should be delimited by `;` and implementations should be case-insensitive.
 
+`skip-event-types` (optional$^{*}$): If specified, indicates the subset of event types that
+  should not be returned by the stream. Any events that do match will be skipped.
+  Types should be delimited by `;` and implementations should be case-insensitive.
+
   ```http
   GET https://service/myfeed/events?event-types=ewallet.preparedepositrequested;ewallet.confirmdepositrequested&token=xaf32&partition=16000&cursor=f1ceaa92eb7c11eda43d6fb319691265
   ```
@@ -242,6 +246,8 @@ Arguments:
 $^{*}$ Optional parameters are optional, not only for the clients, but also for
   the implementing servers, e.g. if you request filtering with an `event-types`
   parameter, the server can disregard it and still return the full stream.
+
+`event-types` and `skip-event-types` can't be used at the same time.
 
 ### Response
 The response is in the NDJSON format; each line (separated by `\n`) represents
